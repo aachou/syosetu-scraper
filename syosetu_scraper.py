@@ -157,8 +157,8 @@ def fetch_single_chapter(chap_info: dict) -> dict:
         return {'index': chap_info['index'], 'title': chap_info['title'], 'html': "", 'error': str(e)}
 
 def force_remove_ol_from_epub(epub_path: str):
-    """【物理拦截核心】：强行解压生成的 epub，暴力用 div 替换里面的所有 ol/li 标签，消除数字编号"""
-    print("🛠️ 正在进行物理层面目录重构（强力消除数字编号）...")
+    """【物理拦截核心·卷可点击+不加粗版】：解压 epub，转换为无数字编号的 div 架构，并精准微调样式"""
+    print("🛠️ 正在进行物理层面目录重构（卷可点击 + 去除加粗 + 消除数字）...")
     temp_dir = epub_path + "_temp_extract"
     if os.path.exists(temp_dir):
         shutil.rmtree(temp_dir)
@@ -168,7 +168,7 @@ def force_remove_ol_from_epub(epub_path: str):
     with zipfile.ZipFile(epub_path, 'r') as zip_ref:
         zip_ref.extractall(temp_dir)
         
-    # 2. 搜寻并彻底清洗导航和目录页面 (通常是 nav.xhtml)
+    # 2. 搜寻并彻底清洗导航和目录页面
     for root, dirs, files in os.walk(temp_dir):
         for file in files:
             if file.endswith(('.xhtml', '.html')):
@@ -176,30 +176,60 @@ def force_remove_ol_from_epub(epub_path: str):
                 with open(file_path, 'r', encoding='utf-8') as f:
                     content = f.read()
                 
-                # 如果文件中包含导航目录标记，或者包含 ol 列表，直接对其降维打击
                 if 'epub:type="toc"' in content or '<ol' in content or '<li' in content:
                     soup = BeautifulSoup(content, 'html.parser')
                     
-                    # 强行把所有 <ol> 换成 <div>，把所有 <li> 换成 <div> 并赋予无边距样式
-                    for ol in soup.find_all('ol'):
-                        ol.name = 'div'
-                        ol.attrs['style'] = 'list-style:none !important; list-style-type:none !important; padding:0; margin:0;'
-                    for ul in soup.find_all('ul'):
-                        ul.name = 'div'
-                        ul.attrs['style'] = 'list-style:none !important; list-style-type:none !important; padding:0; margin:0;'
+                    # 遍历所有的列表项，洗脑转换为带有独立类名的 div
                     for li in soup.find_all('li'):
                         li.name = 'div'
-                        li.attrs['style'] = 'list-style:none !important; list-style-type:none !important; padding:0; margin:0; display:block;'
+                        # 判断它是否包含子列表（说明它是大卷/大分类的主题）
+                        if li.find('ol') or li.find('ul'):
+                            li.attrs['class'] = 'toc-volume-block'
+                        else:
+                            li.attrs['class'] = 'toc-chapter-item'
                     
-                    # 往 head 区域注入最强硬的“灭杀数字编号”全局样式
+                    # 把所有的 ol/ul 容器转换成普通的普通块
+                    for ol in soup.find_all(['ol', 'ul']):
+                        ol.name = 'div'
+                        ol.attrs['class'] = 'toc-level-wrapper'
+                    
+                    # 强力注入全新的、不依赖列表标签的层级样式表
                     if soup.head:
                         style_tag = soup.new_tag('style')
                         style_tag.string = """
-                            nav, ol, ul, li, div { 
+                            /* 彻底根除所有潜在的数字和符号 */
+                            div, nav, a { 
                                 list-style: none !important; 
                                 list-style-type: none !important; 
+                                text-decoration: none !important;
                             }
-                            li::before, ol::before { content: none !important; }
+                            
+                            /* 目录大框架 */
+                            .toc-level-wrapper { 
+                                padding: 0; 
+                                margin: 0; 
+                            }
+                            
+                            /* 分卷/大分类：【已优化】去除 font-weight: bold，保持普通粗细，仅拉开间距和微调大小 */
+                            .toc-volume-block > a, .toc-volume-block > span {
+                                font-weight: normal !important;
+                                font-size: 1.1em;
+                                color: #111;
+                                display: block;
+                                margin-top: 1.2em;
+                                margin-bottom: 0.4em;
+                            }
+                            
+                            /* 普通章节：缩进 1.5 字宽 */
+                            .toc-chapter-item {
+                                padding-left: 1.5em !important;
+                                margin: 0.5em 0;
+                                display: block;
+                            }
+                            
+                            .toc-chapter-item a {
+                                color: #555;
+                            }
                         """
                         soup.head.append(style_tag)
                         
@@ -209,7 +239,6 @@ def force_remove_ol_from_epub(epub_path: str):
     # 3. 重新打包回 EPUB 格式
     os.remove(epub_path)
     with zipfile.ZipFile(epub_path, 'w', zipfile.ZIP_DEFLATED) as zip_out:
-        # EPUB 标准规范：mimetype 文件必须作为第一个文件且不能压缩
         mimetype_path = os.path.join(temp_dir, 'mimetype')
         if os.path.exists(mimetype_path):
             zip_out.write(mimetype_path, 'mimetype', compress_type=zipfile.ZIP_STORED)
@@ -224,7 +253,7 @@ def force_remove_ol_from_epub(epub_path: str):
                 
     # 4. 清理临时解压目录
     shutil.rmtree(temp_dir)
-    print("🎯 物理重构完毕，数字编号已彻底根除。")
+    print("🎯 两全其美：卷目录已支持点击跳转，且已去除加粗。")
 
 def create_epub(ncode_url: str, identifier: str):
     start_time = time.time()
@@ -305,7 +334,10 @@ def create_epub(ncode_url: str, identifier: str):
             vol_epub_chapters.append(c)
             
         if vol_title:
-            toc_structure.append( (epub.Section(vol_title), vol_epub_chapters) )
+            # 核心优化：如果该卷包含章节，则把卷的 Section 节点绑定到该卷第一章的文件名上，使其可点击跳转
+            first_chap_file = vol_epub_chapters[0].file_name if vol_epub_chapters else ""
+            vol_section = epub.Section(vol_title, href=first_chap_file)
+            toc_structure.append( (vol_section, vol_epub_chapters) )
         else:
             toc_structure.extend(vol_epub_chapters)
             
@@ -320,7 +352,7 @@ def create_epub(ncode_url: str, identifier: str):
     print(f"\n正文组装完成，正在进行初步打包...")
     epub.write_epub(output_filename, book, {})
     
-    # 【降维打击触发】：不跟旧库在内存里纠缠，直接去硬盘里修改已经生成的 epub 文件！
+    # 触发物理拦截与重构
     try:
         force_remove_ol_from_epub(output_filename)
     except Exception as patch_err:
@@ -332,7 +364,7 @@ def create_epub(ncode_url: str, identifier: str):
 
 if __name__ == '__main__':
     print("=========================================")
-    print("  Syosetu 电子书 (EPUB) 下载器 - 拦截版  ")
+    print("  Syosetu 电子书 (EPUB) 下载器 - 多线程  ")
     print("=========================================")
     
     user_input = input("请输入小说的 N-code ID (如 n3170ed) 或 完整网址: ").strip()
