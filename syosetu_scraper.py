@@ -116,54 +116,34 @@ def get_novel_metadata(base_url: str):
     return title, author, volumes
 
 def clean_and_compress_html(raw_html: str) -> str:
-    """深度清洗正文 HTML：智能拆分 p 内嵌 br 的情况，并严控连续空行（类型安全无报错版）"""
+    """深度清洗正文 HTML：无视原作者的所有空行，只提取有字的纯净段落（类型安全版）"""
     soup = BeautifulSoup(raw_html, 'html.parser')
     
-    # 1. 显式创建一个标准的基础容器，并获取它
+    # 1. 建立一个全新的基础容器
     new_soup = BeautifulSoup("<div></div>", 'html.parser')
     new_container = new_soup.find('div')
-    
-    # 显式断言，告诉类型检查器：不用担心，这里绝对不是 None！
     assert new_container is not None, "基础容器创建失败"
     
     p_tags = soup.find_all('p')
     
     for p in p_tags:
-        # 提取文字，将 <br/> 转换为换行符 \n
+        # 提取文字，将内嵌的 <br/> 转换为换行符 \n
         raw_text_block = p.get_text(separator="\n").strip()
         lines = raw_text_block.split('\n')
         
         for line in lines:
             clean_line = line.strip()
             
-            # 为每一行文本创建一个干净、纯粹的 <p> 标签
-            new_p = new_soup.new_tag('p')
+            # 【铁律】：只有这一行真的有文字，才把它做成 <p> 标签放进新容器中
             if clean_line:
+                new_p = new_soup.new_tag('p')
                 new_p.string = clean_line
-            
-            # 此时类型检查器确信 new_container 不是 None，安心通过 append
-            new_container.append(new_p)
+                new_p.attrs['class'] = 'epub-text-line'
+                new_container.append(new_p)
+                
+            # 如果是原作者敲的空行（clean_line 为空），直接在这里被无情抛弃，绝不污染新容器
 
-    # 2. 第二步：在完全扁平化的容器里，执行单空行压缩逻辑
-    final_p_tags = new_container.find_all('p')
-    consecutive_empty = 0
-    
-    for p in final_p_tags:
-        p_text = p.get_text().strip()
-        is_empty = (not p_text) or p_text == ""
-        
-        if is_empty:
-            consecutive_empty += 1
-            if consecutive_empty > 1:
-                p.decompose()  # 连续超过1个的空行，直接物理抹除
-            else:
-                p.attrs['class'] = 'epub-blank-line'  # 唯一的合法空行
-                p.clear()
-        else:
-            consecutive_empty = 0  # 遇到文字，计数器归零
-            p.attrs['class'] = 'epub-text-line'
-            
-    # 只返回清洗组装完毕后的内部 HTML，使用安全的序列化方式绕过 .contents 的类型警告
+    # 此时容器内全是紧密排列、无空行的纯文字段落
     return str(new_container.decode_contents())
 
 def fetch_single_chapter(chap_info: dict) -> dict:
@@ -185,8 +165,8 @@ def fetch_single_chapter(chap_info: dict) -> dict:
         return {'index': chap_info['index'], 'title': chap_info['title'], 'html': "", 'error': str(e)}
 
 def force_remove_ol_from_epub(epub_path: str):
-    """【物理拦截核心·卷可点击+不加粗版】：解压 epub，转换为无数字编号的 div 架构，并精准微调样式"""
-    print("🛠️ 正在进行物理层面目录重构（卷可点击 + 去除加粗 + 消除数字）...")
+    """【物理拦截核心·紧凑精致版】：解压 epub，转换为无数字编号的 div 架构，缩紧间距并精准微调样式"""
+    print("🛠️ 正在进行物理层面目录重构（紧凑精致 + 卷可点击 + 去除加粗 + 消除数字）...")
     temp_dir = epub_path + "_temp_extract"
     if os.path.exists(temp_dir):
         shutil.rmtree(temp_dir)
@@ -221,7 +201,7 @@ def force_remove_ol_from_epub(epub_path: str):
                         ol.name = 'div'
                         ol.attrs['class'] = 'toc-level-wrapper'
                     
-                    # 强力注入全新的、不依赖列表标签的层级样式表
+                    # 强力注入全新的、不依赖列表标签的【紧凑型】层级样式表
                     if soup.head:
                         style_tag = soup.new_tag('style')
                         style_tag.string = """
@@ -238,25 +218,28 @@ def force_remove_ol_from_epub(epub_path: str):
                                 margin: 0; 
                             }
                             
-                            /* 分卷/大分类：【已优化】去除 font-weight: bold，保持普通粗细，仅拉开间距和微调大小 */
+                            /* 分卷/大分类：收紧上下间距，保持普通粗细 */
                             .toc-volume-block > a, .toc-volume-block > span {
                                 font-weight: normal !important;
-                                font-size: 1.1em;
+                                font-size: 1.05em;
                                 color: #111;
                                 display: block;
-                                margin-top: 1.2em;
-                                margin-bottom: 0.4em;
+                                margin-top: 0.8em;
+                                margin-bottom: 0.2em;
                             }
                             
-                            /* 普通章节：缩进 1.5 字宽 */
+                            /* 普通章节：缩进微调为 1.0em，大幅收紧垂直间距和行高 */
                             .toc-chapter-item {
-                                padding-left: 1.5em !important;
-                                margin: 0.5em 0;
+                                padding-left: 1.0em !important;
+                                margin: 0.25em 0 !important;
                                 display: block;
+                                line-height: 1.3 !important;
                             }
                             
                             .toc-chapter-item a {
-                                color: #555;
+                                color: #444;
+                                display: block;
+                                padding: 2px 0;
                             }
                         """
                         soup.head.append(style_tag)
@@ -281,7 +264,7 @@ def force_remove_ol_from_epub(epub_path: str):
                 
     # 4. 清理临时解压目录
     shutil.rmtree(temp_dir)
-    print("🎯 两全其美：卷目录已支持点击跳转，且已去除加粗。")
+    print("🎯 紧凑精致版目录物理重构完毕。")
 
 def create_epub(ncode_url: str, identifier: str):
     start_time = time.time()
@@ -336,16 +319,15 @@ def create_epub(ncode_url: str, identifier: str):
                 <title>{chap['title']}</title>
                 <style>
                     body {{ font-family: "MS Mincho", "Hiragino Mincho Pro", serif; line-height: 1.7; padding: 3%; }}
+                    
+                    /* 终极强制排版：所有段落尾部强制腾出 1.7em（刚好一行字）的空间 */
                     p.epub-text-line, p {{ 
-                        margin: 0 0 0.3em 0 !important; 
+                        margin-top: 0 !important;
+                        margin-left: 0 !important;
+                        margin-right: 0 !important;
+                        margin-bottom: 1.7em !important; 
                         padding: 0 !important; 
                         line-height: 1.7 !important;
-                    }}
-                    p.epub-blank-line {{
-                        margin: 0 !important;
-                        padding: 0 !important;
-                        height: 1.2em !important;
-                        line-height: 1.2em !important;
                     }}
                     h2 {{ text-align: center; margin-bottom: 1.5em; border-bottom: 1px solid #ccc; padding-bottom: 10px; }}
                 </style>
@@ -362,7 +344,7 @@ def create_epub(ncode_url: str, identifier: str):
             vol_epub_chapters.append(c)
             
         if vol_title:
-            # 核心优化：如果该卷包含章节，则把卷的 Section 节点绑定到该卷第一章的文件名上，使其可点击跳转
+            # 卷目录可点击跳转到第一话
             first_chap_file = vol_epub_chapters[0].file_name if vol_epub_chapters else ""
             vol_section = epub.Section(vol_title, href=first_chap_file)
             toc_structure.append( (vol_section, vol_epub_chapters) )
@@ -380,7 +362,7 @@ def create_epub(ncode_url: str, identifier: str):
     print(f"\n正文组装完成，正在进行初步打包...")
     epub.write_epub(output_filename, book, {})
     
-    # 触发物理拦截与重构
+    # 触发后处理：物理拦截并清洗总目录
     try:
         force_remove_ol_from_epub(output_filename)
     except Exception as patch_err:
