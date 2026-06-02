@@ -116,27 +116,55 @@ def get_novel_metadata(base_url: str):
     return title, author, volumes
 
 def clean_and_compress_html(raw_html: str) -> str:
-    """深度清洗正文 HTML，压缩连续空行，打上样式标记"""
+    """深度清洗正文 HTML：智能拆分 p 内嵌 br 的情况，并严控连续空行（类型安全无报错版）"""
     soup = BeautifulSoup(raw_html, 'html.parser')
+    
+    # 1. 显式创建一个标准的基础容器，并获取它
+    new_soup = BeautifulSoup("<div></div>", 'html.parser')
+    new_container = new_soup.find('div')
+    
+    # 显式断言，告诉类型检查器：不用担心，这里绝对不是 None！
+    assert new_container is not None, "基础容器创建失败"
+    
     p_tags = soup.find_all('p')
-    consecutive_empty = 0
     
     for p in p_tags:
+        # 提取文字，将 <br/> 转换为换行符 \n
+        raw_text_block = p.get_text(separator="\n").strip()
+        lines = raw_text_block.split('\n')
+        
+        for line in lines:
+            clean_line = line.strip()
+            
+            # 为每一行文本创建一个干净、纯粹的 <p> 标签
+            new_p = new_soup.new_tag('p')
+            if clean_line:
+                new_p.string = clean_line
+            
+            # 此时类型检查器确信 new_container 不是 None，安心通过 append
+            new_container.append(new_p)
+
+    # 2. 第二步：在完全扁平化的容器里，执行单空行压缩逻辑
+    final_p_tags = new_container.find_all('p')
+    consecutive_empty = 0
+    
+    for p in final_p_tags:
         p_text = p.get_text().strip()
         is_empty = (not p_text) or p_text == ""
         
         if is_empty:
             consecutive_empty += 1
             if consecutive_empty > 1:
-                p.decompose()
+                p.decompose()  # 连续超过1个的空行，直接物理抹除
             else:
-                p.attrs['class'] = 'epub-blank-line'
+                p.attrs['class'] = 'epub-blank-line'  # 唯一的合法空行
                 p.clear()
         else:
-            consecutive_empty = 0
+            consecutive_empty = 0  # 遇到文字，计数器归零
             p.attrs['class'] = 'epub-text-line'
             
-    return str(soup)
+    # 只返回清洗组装完毕后的内部 HTML，使用安全的序列化方式绕过 .contents 的类型警告
+    return str(new_container.decode_contents())
 
 def fetch_single_chapter(chap_info: dict) -> dict:
     import random
