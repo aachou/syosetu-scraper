@@ -4,9 +4,6 @@ from ebooklib import epub
 import time
 from urllib.parse import urljoin
 import concurrent.futures
-import zipfile
-import os
-import shutil
 import sys
 from tqdm import tqdm
 
@@ -92,29 +89,6 @@ def fetch_single_chapter(chap_info: dict) -> dict:
     except Exception as e:
         return {'index': chap_info['index'], 'title': chap_info['title'], 'html': "", 'error': str(e)}
 
-def force_remove_ol_from_epub(epub_path: str):
-    temp_dir = epub_path + "_temp"
-    if os.path.exists(temp_dir): shutil.rmtree(temp_dir)
-    os.makedirs(temp_dir)
-    with zipfile.ZipFile(epub_path, 'r') as z: z.extractall(temp_dir)
-    for root, _, files in os.walk(temp_dir):
-        for file in files:
-            if file.endswith(('.xhtml', '.html')):
-                p = os.path.join(root, file)
-                with open(p, 'r', encoding='utf-8') as f: content = f.read()
-                if '<ol' in content or '<li' in content:
-                    soup = BeautifulSoup(content, 'html.parser')
-                    for li in soup.find_all('li'):
-                        li.name = 'div'; li.attrs['class'] = 'toc-volume-block' if (li.find('ol') or li.find('ul')) else 'toc-chapter-item'
-                    for ol in soup.find_all(['ol', 'ul']):
-                        ol.name, ol.attrs['class'] = 'div', 'toc-level-wrapper'
-                    with open(p, 'w', encoding='utf-8') as f: f.write(str(soup))
-    os.remove(epub_path)
-    with zipfile.ZipFile(epub_path, 'w', zipfile.ZIP_DEFLATED) as z:
-        for root, _, files in os.walk(temp_dir):
-            for file in files: z.write(os.path.join(root, file), os.path.relpath(os.path.join(root, file), temp_dir))
-    shutil.rmtree(temp_dir)
-
 def create_epub(ncode_url: str, identifier: str):
     start_time = time.time()
     title, author, volumes = get_novel_metadata(ncode_url)
@@ -132,7 +106,6 @@ def create_epub(ncode_url: str, identifier: str):
     book = epub.EpubBook()
     book.set_identifier(identifier); book.set_title(title); book.set_language('ja'); book.add_author(author)
     
-    # 工业标准 CSS：已修改 h2 为居中，段落保持原样
     style_content = """
     @namespace epub "http://www.idpf.org/2007/ops";
     .paragraph { 
@@ -144,7 +117,7 @@ def create_epub(ncode_url: str, identifier: str):
         text-align: justify !important; 
     }
     h2 { 
-        text-align: center !important; /* 标题居中 */
+        text-align: center !important; 
         font-size: 1.2em !important;
         margin-bottom: 1em !important; 
         padding-bottom: 0 !important;
@@ -154,9 +127,10 @@ def create_epub(ncode_url: str, identifier: str):
     nav_css = epub.EpubItem(uid="style_main", file_name="style/stylesheet.css", media_type="text/css", content=style_content)
     book.add_item(nav_css)
     
-    epub_chapters = []
+    all_epub_chapters = []
     toc_structure = []
     
+    # 核心：使用 epub.Link 实现目录卷名可点击跳转
     for vol_title, chaps in volumes:
         vol_epub_chapters = []
         for chap in chaps:
@@ -167,18 +141,24 @@ def create_epub(ncode_url: str, identifier: str):
             c.add_link(href='style/stylesheet.css', rel='stylesheet', type='text/css')
             c.content = f"<h2>{chap['title']}</h2>{content_html}"
             
-            book.add_item(c); epub_chapters.append(c); vol_epub_chapters.append(c)
+            book.add_item(c)
+            vol_epub_chapters.append(c)
+            all_epub_chapters.append(c)
             
-        if vol_title: 
-            toc_structure.append((epub.Section(vol_title, href=vol_epub_chapters[0].file_name), vol_epub_chapters))
-        else: 
+        if vol_title:
+            # 使用 Link 对象代替 Section，并将其 href 指向卷内第一章
+            vol_link = epub.Link(vol_epub_chapters[0].file_name, vol_title, f"uid_{chaps[0]['index']}")
+            toc_structure.append((vol_link, tuple(vol_epub_chapters)))
+        else:
             toc_structure.extend(vol_epub_chapters)
             
-    book.toc = toc_structure; book.add_item(epub.EpubNcx()); book.add_item(epub.EpubNav()); book.spine = ['nav'] + epub_chapters
+    book.toc = toc_structure
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+    book.spine = ['nav'] + all_epub_chapters
+    
     output_filename = f"{''.join([c for c in title if c.isalnum() or c in ' -_'])}.epub"
     epub.write_epub(output_filename, book, {})
-    try: force_remove_ol_from_epub(output_filename)
-    except Exception as e: print(f"目录处理小问题: {e}")
     print(f"\n✨ 生成成功: {output_filename} (耗时: {time.time() - start_time:.2f} 秒)")
 
 if __name__ == '__main__':
