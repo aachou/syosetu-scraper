@@ -1,0 +1,24 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Editor dirs
+.vscode/
+
+# Distribution / packaging
+*.egg-info/
+*.egg
+*.whl
+
+# Environment
+.env
+.venv
+venv/
+
+# Output files
+*.epub
+
+# System files
+.DS_Store
+Thumbs.db
