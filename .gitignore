@@ -22,3 +22,9 @@ venv/
 # System files
 .DS_Store
 Thumbs.db
+
+# Temporary data and logs
+data/
+*.tmp
+*.log
+__pycache__/

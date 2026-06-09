@@ -4,14 +4,17 @@ from bs4 import BeautifulSoup
 from ebooklib import epub
 import time
 import os
+import json
+import shutil
 from urllib.parse import urljoin
 import sys
 from tqdm import tqdm
+from typing import Optional
 
 # ---------------------------------------------------------
 # 工具函数
 # ---------------------------------------------------------
-async def get_soup(url: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore, proxy: str | None = None) -> BeautifulSoup:
+async def get_soup(url: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore, proxy: Optional[str] = None) -> BeautifulSoup:
     for attempt in range(3):
         try:
             async with semaphore:
@@ -25,7 +28,7 @@ async def get_soup(url: str, session: aiohttp.ClientSession, semaphore: asyncio.
             await asyncio.sleep(2)
     raise Exception("请求失败") 
 
-async def get_novel_metadata(base_url: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore, proxy: str | None = None):
+async def get_novel_metadata(base_url: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore, proxy: Optional[str] = None):
     print(f"正在分析小说信息...")
     current_url: str | None = base_url
     title, author, volumes = "未知书名", "未知作者", []
@@ -93,27 +96,68 @@ def clean_and_compress_html(raw_html: str) -> str:
                 new_container.append(new_p)
     return str(new_container.decode_contents())
 
-async def fetch_single_chapter(chap_info: dict, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore, proxy: str | None = None) -> dict:
-    try:
-        soup = await get_soup(chap_info['url'], session, semaphore, proxy)
-        content = soup.find('div', class_='js-novel-text') or soup.find('div', class_='p-novel__text') or soup.find('div', id='novel_honbun')
-        if not content:
-            raise Exception("未找到正文内容")
-        return {
-            'index': chap_info['index'],
-            'title': chap_info['title'],
-            'html': clean_and_compress_html(str(content)),
-            'error': None
-        }
-    except Exception as e:
-        return {
-            'index': chap_info['index'],
-            'title': chap_info['title'],
-            'html': "",
-            'error': str(e)
-        }
+async def fetch_single_chapter(chap_info: dict, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore, proxy: Optional[str] = None, data_dir: Optional[str] = None, max_attempts: int = 3) -> dict:
+    index = chap_info['index']
+    title = chap_info.get('title', '')
+    file_path = None
+    if data_dir:
+        file_path = os.path.join(data_dir, f"chapter_{index:04d}.json")
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception:
+                pass
 
-async def create_epub(ncode_url: str, identifier: str, proxy: str | None = None):
+    last_err = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            soup = await get_soup(chap_info['url'], session, semaphore, proxy)
+            content = soup.find('div', class_='js-novel-text') or soup.find('div', class_='p-novel__text') or soup.find('div', id='novel_honbun')
+            if not content:
+                raise Exception("未找到正文内容")
+            result = {
+                'index': index,
+                'title': title,
+                'html': clean_and_compress_html(str(content)),
+                'error': None
+            }
+            if file_path:
+                tmp_path = file_path + '.tmp'
+                with open(tmp_path, 'w', encoding='utf-8') as f:
+                    json.dump(result, f, ensure_ascii=False)
+                os.replace(tmp_path, file_path)
+            return result
+        except Exception as e:
+            last_err = e
+            if attempt < max_attempts:
+                await asyncio.sleep(2 * attempt)
+            else:
+                result = {
+                    'index': index,
+                    'title': title,
+                    'html': "",
+                    'error': str(e)
+                }
+                if file_path:
+                    try:
+                        tmp_path = file_path + '.tmp'
+                        with open(tmp_path, 'w', encoding='utf-8') as f:
+                            json.dump(result, f, ensure_ascii=False)
+                        os.replace(tmp_path, file_path)
+                    except Exception:
+                        pass
+                return result
+
+    # 兜底：确保所有代码路径都有返回值（用于类型检查）
+    return {
+        'index': index,
+        'title': title,
+        'html': "",
+        'error': str(last_err) if last_err is not None else 'unknown error'
+    }
+
+async def create_epub(ncode_url: str, identifier: str, proxy: Optional[str] = None):
     start_time = time.time()
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -129,12 +173,30 @@ async def create_epub(ncode_url: str, identifier: str, proxy: str | None = None)
     async with aiohttp.ClientSession(headers=headers, cookies=cookies, timeout=timeout, connector=connector) as session:
         title, author, volumes = await get_novel_metadata(ncode_url, session, semaphore, proxy)
         all_chapters = [ch for _, chaps in volumes for ch in chaps]
-
         print(f"\n🚀 开始抓取，共 {len(all_chapters)} 章")
+
+        # 临时数据目录，用于断点续传
+        data_dir = os.path.join('data', identifier)
+        os.makedirs(data_dir, exist_ok=True)
+
         fetched_results = {}
-        tasks = [asyncio.create_task(fetch_single_chapter(ch, session, semaphore, proxy)) for ch in all_chapters]
+        existing_count = 0
+        for ch in all_chapters:
+            fp = os.path.join(data_dir, f"chapter_{ch['index']:04d}.json")
+            if os.path.exists(fp):
+                try:
+                    with open(fp, 'r', encoding='utf-8') as f:
+                        fetched_results[ch['index']] = json.load(f)
+                        existing_count += 1
+                except Exception:
+                    pass
+
+        # 只为尚未持久化的章节创建任务
+        tasks = [asyncio.create_task(fetch_single_chapter(ch, session, semaphore, proxy, data_dir)) for ch in all_chapters if ch['index'] not in fetched_results]
 
         with tqdm(total=len(all_chapters), desc="正在抓取正文") as pbar:
+            if existing_count:
+                pbar.update(existing_count)
             for future in asyncio.as_completed(tasks):
                 res = await future
                 fetched_results[res['index']] = res
@@ -197,6 +259,14 @@ async def create_epub(ncode_url: str, identifier: str, proxy: str | None = None)
     output_filename = f"{''.join([c for c in title if c.isalnum() or c in ' -_'])}.epub"
     epub.write_epub(output_filename, book, {})
     print(f"\n✨ 生成成功: {output_filename} (耗时: {time.time() - start_time:.2f} 秒)")
+
+    # 清理临时数据目录
+    try:
+        if 'data_dir' in locals() and os.path.exists(data_dir):
+            shutil.rmtree(data_dir)
+            print(f"已清理临时目录: {data_dir}")
+    except Exception:
+        pass
 
 async def main():
     if len(sys.argv) > 1:
