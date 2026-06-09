@@ -2,7 +2,6 @@ import asyncio
 import aiohttp
 from bs4 import BeautifulSoup
 from ebooklib import epub
-import ssl
 import time
 import os
 from urllib.parse import urljoin
