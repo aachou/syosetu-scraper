@@ -1,6 +1,6 @@
 [project]
 name = "syosetu-scraper"
-version = "0.2.1"
+version = "0.3.0"
 description = "抓取 syosetu 网站上的小说并生成 epub 电子书。"
 readme = "README.md"
 requires-python = ">=3.14"
