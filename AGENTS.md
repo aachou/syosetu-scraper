@@ -54,5 +54,5 @@ gh release create v<version> --title "v<version> — <summary>" --notes "<body>"
 ```
 
 - Title 格式: `v<version> — <中文概括>`
-- Body 分三部分: `## 新功能` `## BUG 修复` `## 新测试`
+- Body 分三部分: `## 新功能` `## BUG 修复` `## 新测试`，如果对应部分的内容为空则不输出这个章节
 - 不要对 Markdown 内任何符号加反斜杠转义（包括反引号包围的代码）— shell 中直接写纯文本，不嵌套引号
