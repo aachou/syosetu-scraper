@@ -1,0 +1,19 @@
+[project]
+name = "syosetu-scraper"
+version = "0.2.0"
+description = "抓取 syosetu 网站上的小说并生成 epub 电子书。"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "aiohttp>=3.14.1",
+    "beautifulsoup4>=4.15.0",
+    "ebooklib>=0.20",
+    "tqdm>=4.68.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.0",
+    "pytest-asyncio>=1.4.0",
+]
+

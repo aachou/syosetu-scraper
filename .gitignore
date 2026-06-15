@@ -27,4 +27,3 @@ Thumbs.db
 data/
 *.tmp
 *.log
-__pycache__/
