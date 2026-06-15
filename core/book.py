@@ -38,9 +38,10 @@ async def list_chapters(ncode_url: str, identifier: str, proxy: Optional[str] = 
     async with aiohttp.ClientSession(headers=HEADERS, cookies=COOKIES, timeout=aiohttp.ClientTimeout(total=15, sock_connect=5, sock_read=15), connector=connector) as session:
         title, author, volumes = await get_novel_metadata(ncode_url, session, semaphore, proxy, max_attempts)
 
-    print(f"\n标题: {title}")
-    print(f"作者: {author}")
-    print(f"章节: {sum(len(chaps) for _, chaps in volumes)}")
+    print(f"📖 标题: {title}")
+    print(f"✍️ 作者: {author}")
+    total = sum(len(chaps) for _, chaps in volumes)
+    print(f"📑 章节: {total}")
     print()
     for vol_title, chaps in volumes:
         if vol_title:
@@ -57,14 +58,17 @@ async def create_epub(ncode_url: str, identifier: str, proxy: Optional[str] = No
 
     connector = aiohttp.TCPConnector(ssl=False) if proxy else None
     if proxy:
-        print("警告：已禁用 SSL 证书验证以兼容代理。")
+        print("⚠️ 警告：已禁用 SSL 证书验证以兼容代理。")
 
     try:
         async with aiohttp.ClientSession(headers=HEADERS, cookies=COOKIES, timeout=timeout, connector=connector) as session:
             title, author, volumes = await get_novel_metadata(ncode_url, session, semaphore, proxy, max_attempts)
             all_chapters = [ch for _, chaps in volumes for ch in chaps]
 
-            print(f"\n开始抓取，共 {len(all_chapters)} 章")
+            print(f"📖 标题: {title}")
+            print(f"✍️ 作者: {author}")
+            print(f"📑 章节: {len(all_chapters)} 章")
+            print(f"\n⬇️  开始抓取...")
 
             data_dir = os.path.join('data', identifier)
             os.makedirs(data_dir, exist_ok=True)
@@ -83,17 +87,24 @@ async def create_epub(ncode_url: str, identifier: str, proxy: Optional[str] = No
 
             tasks = [asyncio.create_task(fetch_single_chapter(ch, session, semaphore, proxy, data_dir, max_attempts)) for ch in all_chapters if ch['index'] not in fetched_results]
 
-            with tqdm(total=len(all_chapters), desc="正在抓取正文") as pbar:
+            failed_count = 0
+            with tqdm(total=len(all_chapters), desc="⬇️  正在抓取正文") as pbar:
                 if existing_count:
+                    pbar.set_postfix_str(f"已缓存 {existing_count}")
                     pbar.update(existing_count)
                 for future in asyncio.as_completed(tasks):
                     res = await future
                     fetched_results[res['index']] = res
+                    if res['error']:
+                        failed_count += 1
+                    pbar.set_postfix_str(f"失败 {failed_count}" if failed_count else "")
                     pbar.update()
                     if delay:
                         await asyncio.sleep(delay)
 
-        print("\n正在组装 EPUB...")
+        if failed_count:
+            print(f"❌ {failed_count} 章抓取失败")
+        print("📦 正在组装 EPUB...")
         book = epub.EpubBook()
         book.set_identifier(identifier)
         book.set_title(title)
@@ -136,10 +147,12 @@ async def create_epub(ncode_url: str, identifier: str, proxy: Optional[str] = No
         os.makedirs(output_dir, exist_ok=True)
         output_filename = os.path.join(output_dir, f"{sanitize_filename(title)}.epub")
         epub.write_epub(output_filename, book, {})
-        print(f"\n生成成功: {output_filename} (耗时: {time.time() - start_time:.2f} 秒)")
+        elapsed = time.time() - start_time
+        print(f"\n✓ 生成成功: {output_filename}")
+        print(f"  耗时: {elapsed:.1f} 秒 | 章节: {len(all_epub_chapters)}/{len(all_chapters)}")
 
         return True
     finally:
         if not keep_temp and data_dir and os.path.exists(data_dir):
             shutil.rmtree(data_dir)
-            print(f"已清理临时目录: {data_dir}")
+            print(f"  🗑️ 已清理临时文件")

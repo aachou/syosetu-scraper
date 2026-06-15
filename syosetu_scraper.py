@@ -32,11 +32,13 @@ def main():
     args = parse_args(sys.argv[1:])
     proxy = args.proxy or os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY') or os.environ.get('https_proxy') or os.environ.get('http_proxy')
     ncode_id = args.ncode.split('/')[-1]
+    print(f"📖 处理 Ncode: {ncode_id}")
     if proxy:
-        print(f"使用代理: {proxy}")
+        print(f"🌐 使用代理: {proxy}")
 
     try:
         if args.list:
+            print("📋 列出章节中...")
             asyncio.run(list_chapters(
                 f"https://ncode.syosetu.com/{ncode_id}/",
                 ncode_id,
@@ -59,10 +61,10 @@ def main():
             if not success:
                 sys.exit(1)
     except KeyboardInterrupt:
-        print("\n用户中断，退出。")
+        print("\n🚫 用户中断，退出。")
         sys.exit(130)
     except Exception as e:
-        print(f"\n错误: {e}")
+        print(f"\n❌ 错误: {e}")
         sys.exit(1)
 
 

@@ -24,7 +24,7 @@ async def get_soup(url: str, session: aiohttp.ClientSession, semaphore: asyncio.
 
 
 async def get_novel_metadata(base_url: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore, proxy: Optional[str] = None, max_attempts: int = 3):
-    print("正在分析小说信息...")
+    print("🔍 正在分析小说信息...")
     current_url: str | None = base_url
     title, author, volumes = "未知书名", "未知作者", []
     current_vol_title, current_vol_chapters = None, []
